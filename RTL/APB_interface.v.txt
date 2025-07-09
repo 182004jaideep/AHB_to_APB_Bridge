@@ -1,0 +1,51 @@
+// =============================================================================
+// APB Interface Module
+// =============================================================================
+// This module simulates APB peripherals by providing signal pass-through
+// and generating read data responses during APB read transactions
+// =============================================================================
+
+module APB_interface(
+    // APB Input Signals from Bridge
+    input pwrite,                  // APB write enable
+    input penable,                 // APB enable (access phase)
+    input [2:0] pselx,             // APB peripheral select
+    input [31:0] paddr,            // APB address bus
+    input [31:0] pwdata,           // APB write data bus
+    
+    // APB Output Signals (pass-through to peripherals)
+    output pwrite_out,             // APB write enable output
+    output penable_out,            // APB enable output
+    output [2:0] psel_out,         // APB peripheral select output
+    output [31:0] paddr_out,       // APB address output
+    output [31:0] pwdata_out,      // APB write data output
+    output reg [31:0] prdata       // APB read data (generated)
+);
+
+    // =============================================================================
+    // Signal Pass-Through Logic
+    // =============================================================================
+    // Direct connection of APB signals to simulate connection to real peripherals
+    // =============================================================================
+    assign pwrite_out = pwrite;
+    assign psel_out = pselx;
+    assign paddr_out = paddr;
+    assign pwdata_out = pwdata;    
+    assign penable_out = penable;
+    
+    // =============================================================================
+    // Read Data Generation Logic
+    // =============================================================================
+    // Simulates peripheral read data response during APB read transactions
+    // Returns a constant value when a valid read is detected
+    // =============================================================================
+    always @(*) begin
+        if (!pwrite && penable) begin      // Read transaction in access phase
+            prdata = 32'd25;               // Constant read data response
+        end
+        else begin
+            prdata = 32'd0;                // Default value for non-read operations
+        end
+    end
+
+endmodule

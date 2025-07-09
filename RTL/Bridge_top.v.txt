@@ -1,0 +1,108 @@
+// =============================================================================
+// AHB-APB Bridge Top Module
+// =============================================================================
+// This module serves as the top-level wrapper for the AHB-APB bridge,
+// connecting the AHB slave interface with the APB controller to enable
+// communication between AHB master and APB peripherals.
+// =============================================================================
+
+module Bridge_top(
+    // AHB Interface Signals
+    input Hclk,                    // AHB system clock
+    input Hresetn,                 // AHB active-low reset
+    input Hwrite,                  // AHB write/read control (1=write, 0=read)
+    input Hreadyin,                // AHB ready input from master
+    input [1:0] Htrans,            // AHB transfer type (IDLE, BUSY, NONSEQ, SEQ)
+    input [31:0] Haddr,            // AHB address bus
+    input [31:0] Hwdata,           // AHB write data bus
+    input [31:0] Prdata,           // APB read data from peripherals
+    
+    // APB Interface Signals
+    output Pwrite,                 // APB write enable
+    output Penable,                // APB enable signal (second cycle of transfer)
+    output [2:0] Pselx,            // APB peripheral select signals
+    output [31:0] Pwdata,          // APB write data bus
+    output [31:0] Paddr,           // APB address bus
+    
+    // AHB Response Signals
+    output Hreadyout,              // AHB ready output to master
+    output [31:0] Hrdata,          // AHB read data bus
+    output [1:0] Hresp             // AHB response (OKAY, ERROR, RETRY, SPLIT)
+);
+
+    // Internal wire declarations for inter-module communication
+    wire valid;                    // Valid transaction indicator from AHB slave
+    wire Hwritereg, Hwritereg1;    // Registered write control signals
+    wire [31:0] Haddr1, Haddr2;    // Address pipeline registers
+    wire [31:0] Hwdata1, Hwdata2;  // Write data pipeline registers
+    wire [2:0] tempselx;           // Temporary peripheral select signals
+
+    // =============================================================================
+    // AHB Slave Interface Instance
+    // =============================================================================
+    // This module handles the AHB protocol, decodes addresses, and manages
+    // the handshaking between AHB master and the bridge controller
+    // =============================================================================
+    AHB_slave_interface ahb_s (
+        // Clock and Reset
+        .Hclk(Hclk), 
+        .Hresetn(Hresetn), 
+        
+        // AHB Control Signals
+        .Hwrite(Hwrite),
+        .Hreadyin(Hreadyin),
+        .Htrans(Htrans), 
+        
+        // AHB Data Signals
+        .Haddr(Haddr), 
+        .Hwdata(Hwdata), 
+        .Prdata(Prdata),
+        
+        // AHB Response Signals
+        .Hresp(Hresp), 
+        .Hrdata(Hrdata), 
+        
+        // Internal Control Signals to APB Controller
+        .valid(valid),              // Indicates valid AHB transaction
+        .Haddr1(Haddr1),           // Address pipeline stage 1
+        .Haddr2(Haddr2),           // Address pipeline stage 2
+        .Hwdata1(Hwdata1),         // Write data pipeline stage 1
+        .Hwdata2(Hwdata2),         // Write data pipeline stage 2
+        .Hwritereg(Hwritereg),     // Registered write control
+        .Hwritereg1(Hwritereg1),   // Second stage write control
+        .tempselx(tempselx)        // Decoded peripheral select
+    );
+
+    // =============================================================================
+    // APB Controller Instance
+    // =============================================================================
+    // This module implements the APB protocol state machine, converting
+    // AHB transactions into proper APB setup and access phases
+    // =============================================================================
+    APB_controller apb_c (
+        // Clock and Reset
+        .Hclk(Hclk), 
+        .Hresetn(Hresetn), 
+        
+        // Control from AHB Slave Interface
+        .valid(valid),              // Valid transaction from AHB
+        .Hwrite(Hwrite),           // Write control
+        .Haddr(Haddr),             // Current address
+        .Hwdata(Hwdata),           // Current write data
+        .Hwritereg(Hwritereg),     // Registered write control
+        .Haddr1(Haddr1),           // Pipeline address stage 1
+        .Haddr2(Haddr2),           // Pipeline address stage 2
+        .Hwdata1(Hwdata1),         // Pipeline data stage 1
+        .Hwdata2(Hwdata2),         // Pipeline data stage 2
+        .tempselx(tempselx),       // Peripheral select decode
+        
+        // APB Protocol Outputs
+        .pwrite(Pwrite),           // APB write enable
+        .penable(Penable),         // APB enable (access phase)
+        .pselx(Pselx),             // APB peripheral select
+        .pwdata(Pwdata),           // APB write data
+        .paddr(Paddr),             // APB address
+        .Hreadyout(Hreadyout)      // Ready back to AHB master
+    );
+
+endmodule

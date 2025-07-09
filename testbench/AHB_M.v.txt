@@ -1,0 +1,140 @@
+// =============================================================================
+// AHB Master Test Module
+// =============================================================================
+// This module simulates an AHB master for testing purposes, providing
+// tasks for different types of AHB transactions (single, burst)
+// =============================================================================
+
+`timescale 1ns / 1ps
+
+module AHB_M(
+    // Clock and Reset
+    input hclk,                    // System clock
+    input hresetn,                 // Active-low reset
+    input hreadyout,               // Ready signal from slave
+    input [31:0] hrdata,           // Read data from slave
+    
+    // AHB Master Outputs
+    output reg [31:0] haddr,       // Address bus
+    output reg [31:0] hwdata,      // Write data bus
+    output reg hwrite,             // Write/read control
+    output reg hreadyin,           // Ready input to slave
+    output reg [1:0] htrans        // Transfer type
+);
+    
+    // Additional AHB control signals (not connected but defined for completeness)
+    reg [2:0] hburst;              // Burst type (SINGLE, INCR, WRAP4, etc.)
+    reg [2:0] hsize;               // Transfer size (8-bit, 16-bit, 32-bit, etc.)
+    
+    integer i, j;                  // Loop counters for burst operations
+    
+    // =============================================================================
+    // Single Write Transaction Task
+    // =============================================================================
+    // Implements a single AHB write transaction with proper protocol timing
+    // Phase 1: Address phase - present address and control signals
+    // Phase 2: Data phase - present write data
+    // =============================================================================
+    task single_write();
+        begin
+            // Address Phase: Present address and control signals
+            @(posedge hclk)
+            #1;
+            begin 
+                hwrite = 1;                    // Write transaction
+                htrans = 2'd2;                 // NONSEQ transfer type
+                hsize = 0;                     // 8-bit transfer size
+                hburst = 0;                    // SINGLE burst
+                hreadyin = 1;                  // Master ready
+                haddr = 32'h8000_0001;         // Target address
+            end
+            
+            // Data Phase: Present write data, change to IDLE
+            @(posedge hclk)
+            #1;
+            begin
+                htrans = 2'd0;                 // IDLE - end of transaction
+                hwdata = 32'h80;               // Write data
+            end
+        end
+    endtask
+     
+    // =============================================================================
+    // Single Read Transaction Task
+    // =============================================================================
+    // Implements a single AHB read transaction
+    // Phase 1: Address phase - present address and control signals
+    // Phase 2: Data phase - slave presents read data
+    // =============================================================================
+    task single_read();
+        begin
+            // Address Phase: Present address and control signals
+            @(posedge hclk)
+            begin
+                hwrite = 0;                    // Read transaction
+                htrans = 2'd2;                 // NONSEQ transfer type
+                hsize = 0;                     // 8-bit transfer size
+                hburst = 0;                    // SINGLE burst
+                hreadyin = 1;                  // Master ready
+                haddr = 32'h8000_0001;         // Target address
+            end
+            
+            // Data Phase: Change to IDLE (read data available on hrdata)
+            @(posedge hclk)
+            #1;
+            begin
+                htrans = 2'd0;                 // IDLE - end of transaction
+            end
+        end
+    endtask
+    
+    // =============================================================================
+    // Burst Write Transaction Task
+    // =============================================================================
+    // Implements a 4-beat incrementing burst write transaction
+    // Beat 1: NONSEQ - start of burst
+    // Beat 2-3: SEQ - continuation of burst
+    // Beat 4: Final beat with transition to IDLE
+    // =============================================================================
+    task burst_write();
+        begin
+            // Beat 1: Address phase of first transfer (NONSEQ)
+            @(posedge hclk)
+            #1;
+            begin 
+                hwrite = 1;                    // Write transaction
+                htrans = 2'd2;                 // NONSEQ - start of burst
+                hsize = 0;                     // 8-bit transfer size
+                hburst = 3'd3;                 // INCR4 burst type
+                hreadyin = 1;                  // Master ready
+                haddr = 32'h8000_0001;         // Starting address
+            end
+            
+            // Beat 2: Data phase of beat 1, address phase of beat 2
+            @(posedge hclk)
+            #1; 
+            begin
+                haddr = haddr + 1'b1;          // Increment address
+                hwdata = ($random) % 256;      // Random write data for beat 1
+                htrans = 2'd3;                 // SEQ - continuation of burst
+            end
+            
+            // Beats 3-4: Continue burst with SEQ transfers
+            for (i=0; i<2; i=i+1) begin
+                @(posedge hclk);
+                #1;
+                haddr = haddr + 1'b1;          // Increment address
+                hwdata = ($random) % 256;      // Random write data
+                htrans = 2'd3;                 // SEQ - continuation of burst
+            end
+            
+            // Final beat: End burst with IDLE
+            @(posedge hclk);
+            begin
+                hwdata = ($random) % 256;      // Final write data
+                htrans = 2'd0;                 // IDLE - end of burst
+            end
+        end        
+    endtask
+        
+endmodule

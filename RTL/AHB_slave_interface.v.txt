@@ -1,0 +1,195 @@
+`timescale 1ns / 1ps
+
+//==============================================================================
+// AHB TO APB BRIDGE - SLAVE INTERFACE MODULE
+//==============================================================================
+// This module implements the AHB slave interface of an AHB-to-APB bridge.
+// It receives AHB transactions from masters and prepares the control signals
+// and data for the APB controller to forward to APB slaves.
+//
+// Key Features:
+// - 2-stage pipeline for address, data, and control signals
+// - Address decoding for up to 3 APB peripherals
+// - Valid transaction detection based on address range and transfer type
+// - Simple OKAY-only response (no error handling)
+//==============================================================================
+
+module AHB_slave_interface(
+    //--------------------------------------------------------------------------
+    // CLOCK AND RESET SIGNALS
+    //--------------------------------------------------------------------------
+    input  Hclk,         // AHB system clock - all operations synchronized to this
+    input  Hresetn,      // Active-low asynchronous reset signal
+    
+    //--------------------------------------------------------------------------
+    // AHB MASTER INTERFACE - INPUT SIGNALS
+    //--------------------------------------------------------------------------
+    input   Hwrite,       // Transfer direction: 1 = Write, 0 = Read
+    input   Hreadyin,     // Previous transfer complete indicator
+                                    // Must be HIGH for current transfer to be valid
+    input  [1:0]   Htrans,       // Transfer type control:
+                                    // 00 = IDLE, 01 = BUSY, 10 = NONSEQ, 11 = SEQ
+    input [31:0]  Haddr,        // 32-bit address from AHB master
+    input  [31:0]  Hwdata,       // 32-bit write data from AHB master
+    
+    //--------------------------------------------------------------------------
+    // APB SLAVE INTERFACE - INPUT SIGNALS  
+    //--------------------------------------------------------------------------
+    input  [31:0]  Prdata,       // 32-bit read data from selected APB slave
+                                    // This data is forwarded back to AHB master
+    
+    //--------------------------------------------------------------------------
+    // AHB MASTER INTERFACE - OUTPUT SIGNALS
+    //--------------------------------------------------------------------------
+    output [1:0]  Hresp,        // Transfer response to AHB master
+                                    // 00 = OKAY, 01 = ERROR, 10 = RETRY, 11 = SPLIT
+    output [31:0] Hrdata,       // 32-bit read data to AHB master
+    
+    //--------------------------------------------------------------------------
+    // APB CONTROLLER INTERFACE - OUTPUT SIGNALS
+    // These signals provide the APB controller with processed AHB transaction info
+    //--------------------------------------------------------------------------
+    output reg         valid,        // HIGH when valid AHB transfer detected
+                                    // Used by APB controller to start APB transaction
+    
+    // PIPELINED ADDRESS SIGNALS
+    output reg [31:0]  Haddr1,       // Pipeline stage 1: Current address
+    output reg [31:0]  Haddr2,       // Pipeline stage 2: Previous address
+    
+    // PIPELINED DATA SIGNALS  
+    output reg [31:0]  Hwdata1,      // Pipeline stage 1: Current write data
+    output reg [31:0]  Hwdata2,      // Pipeline stage 2: Previous write data
+    
+    // PIPELINED CONTROL SIGNALS
+    output reg         Hwritereg,    // Pipeline stage 1: Current write/read control
+    output reg         Hwritereg1,   // Pipeline stage 2: Previous write/read control
+    
+    // PERIPHERAL SELECTION
+    output reg [2:0]   tempselx      // One-hot peripheral select for APB PSEL
+                                    // Bit 0: Peripheral 1, Bit 1: Peripheral 2, Bit 2: Peripheral 3
+);
+
+//==============================================================================
+// PARAMETER DEFINITIONS
+//==============================================================================
+// AHB Transfer Type encoding (HTRANS field values)
+parameter IDLE_TRANS   = 2'b00;    // No transfer required
+parameter BUSY_TRANS   = 2'b01;    // Master busy, transfer later  
+parameter NONSEQ_TRANS = 2'b10;    // Single transfer or first of burst
+parameter SEQ_TRANS    = 2'b11;    // Remaining transfers in burst
+
+//==============================================================================
+// ADDRESS PIPELINE LOGIC
+//==============================================================================
+// Two-stage pipeline for address signals to handle AHB pipelined protocol
+// Stage 1 (Haddr1): Captures current address from master
+// Stage 2 (Haddr2): Holds previous address for data phase alignment
+always @(posedge Hclk) begin
+    if (!Hresetn) begin
+        // Reset: Clear both pipeline stages
+        Haddr1 <= 32'd0;
+        Haddr2 <= 32'd0;
+    end 
+    else begin
+        // Normal operation: Shift addresses through pipeline
+        Haddr1 <= Haddr;     // Stage 1 gets new address from master
+        Haddr2 <= Haddr1;    // Stage 2 gets address from stage 1
+    end 
+end
+
+//==============================================================================
+// DATA PIPELINE LOGIC  
+//==============================================================================
+// Two-stage pipeline for write data to align with address pipeline
+// In AHB protocol, write data comes one cycle after address
+always @(posedge Hclk) begin
+    if (!Hresetn) begin
+        // Reset: Clear both data pipeline stages
+        Hwdata1 <= 32'd0; 
+        Hwdata2 <= 32'd0;
+    end
+    else begin 
+        // Normal operation: Shift data through pipeline
+        Hwdata1 <= Hwdata;   // Stage 1 gets new data from master
+        Hwdata2 <= Hwdata1;  // Stage 2 gets data from stage 1
+    end
+end
+
+//==============================================================================
+// WRITE CONTROL PIPELINE LOGIC
+//==============================================================================
+// Two-stage pipeline for write/read control signal
+// Maintains alignment with address and data pipelines
+always @(posedge Hclk) begin
+    if (!Hresetn) begin
+        // Reset: Default to read operations
+        Hwritereg  <= 1'b0;
+        Hwritereg1 <= 1'b0;
+    end
+    else begin
+        // Normal operation: Shift control signals through pipeline
+        Hwritereg  <= Hwrite;     // Stage 1 gets current write control
+        Hwritereg1 <= Hwritereg;  // Stage 2 gets previous write control
+    end
+end    
+
+//==============================================================================
+// PERIPHERAL ADDRESS DECODING
+//==============================================================================
+// Combinational logic to decode address and generate peripheral select
+// Address Map:
+// 0x8000_0000 - 0x83FF_FFFF : Peripheral 1 (tempselx[0] = 1)
+// 0x8400_0000 - 0x87FF_FFFF : Peripheral 2 (tempselx[1] = 1) 
+// 0x8800_0000 - 0x8BFF_FFFF : Peripheral 3 (tempselx[2] = 1)
+// All other addresses         : No peripheral selected (tempselx = 000)
+always @(*) begin
+    if (Haddr >= 32'h8000_0000 && Haddr < 32'h8400_0000) begin
+        // Address in Peripheral 1 range
+        tempselx = 3'b001;
+    end
+    else if (Haddr >= 32'h8400_0000 && Haddr < 32'h8800_0000) begin
+        // Address in Peripheral 2 range
+        tempselx = 3'b010;
+    end
+    else if (Haddr >= 32'h8800_0000 && Haddr < 32'h8c00_0000) begin
+        // Address in Peripheral 3 range  
+        tempselx = 3'b100;
+    end
+    else begin
+        // Address outside all peripheral ranges
+        tempselx = 3'b000;
+    end
+end
+
+//==============================================================================
+// VALID TRANSACTION DETECTION
+//==============================================================================
+// Combinational logic to determine if current AHB transfer is valid
+// A transfer is valid when ALL conditions are met:
+// 1. Address is within supported peripheral address range
+// 2. Previous transfer is complete (Hreadyin = 1)  
+// 3. Transfer type indicates actual data transfer (NONSEQ or SEQ)
+always @(*) begin
+    if ((Haddr >= 32'h8000_0000 && Haddr < 32'h8c00_0000) &&  // Address in range
+        (Hreadyin == 1'b1) &&                                  // Previous transfer done
+        (Htrans == NONSEQ_TRANS || Htrans == SEQ_TRANS)) begin // Valid transfer type
+        valid = 1'b1;  // Signal valid transaction to APB controller
+    end
+    else begin
+        valid = 1'b0;  // Invalid transaction - APB controller should ignore
+    end
+end
+
+//==============================================================================
+// AHB RESPONSE AND DATA OUTPUT
+//==============================================================================
+// Simple response handling - always returns OKAY
+// In a more complex implementation, this could return ERROR for
+// unsupported addresses or failed APB transactions
+assign Hresp = 2'b00;  // Always return OKAY response (00)
+
+// Read data path - forward APB slave data directly to AHB master
+// APB controller is responsible for selecting correct slave data
+assign Hrdata = Prdata; // Forward read data from APB slave to AHB master
+
+endmodule
